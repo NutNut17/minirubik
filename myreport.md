@@ -182,30 +182,136 @@ This rate is for a sequential 4-instruction loop, the baseline's loads and store
 
 > Outline: Stage 2, design: IDA* plus heuristic tables, the admissibility argument, and memory per table.
 
+
+
+## 3. Stage 2: Representation and Algorithm
+<!-- Draft written with AI assistance. Replace the wording with your own; the numbers come from calibration/ and ida.c. -->
+
 ### Search: IDA*
+
+Iterative-deepening A* Algorithm (Korf 1985) with an explicit stack:
+
+```
+for bound = h(start) .. 11:
+    depth-first walk; at each child with g = depth + 1:
+        prune if g + h(child) > bound
+        succeed if child is the solved state
+    nothing found: bound = bound + 1
+```
+
+The Memory is one 12-frame stack, no recursion. A move costs 1 whatever its angle. After a move on face f, all three moves on f are skipped, this prunes together with constructed heuristic tables.
 
 ### Heuristic tables
 
+h(p, o) is the maximum of four lower bounds. 
+
+| Table | Remembers | Keys | Packed size |
+| :--- | :--- | ---: | ---: |
+| `hp` | the positions of all cubies (twists ignored) | 5,040 | in the permutation records |
+| `ho` | the twists only (positions ignored) | 729 | in the twist records |
+| A | positions of cubies {0, 3, 6} and the twists at positions {0, 2, 3, 4, 5} | 210 × 243 = 51,030 | 25,515 B |
+| B | positions of cubies {0, 1, 2, 3, 5} and the twists at positions {0, 1, 2} | 2,520 × 27 = 68,040 | 34,020 B |
+
+The tables are built on the host. The heiristics table reduce the count of worse-case node.
+
+| Heuristic | Mean h (all states, true mean 8.756) | Worst nodes | Mean nodes at distance 11 |
+| :--- | ---: | ---: | ---: |
+| `hp`, `ho` | 5.144 | 639,792 | 206,618 |
+| **+ tables A and B (119,070 keys, chosen)** | **6.743** | **45,312** | **9,721** |
+
+Negative results: a "last-level shortcut" (test for the solved state without expanding children) would help nothing, since only 0.3 % of the children are generated at the last level; and a single bigger table did not fit the budget at one byte per entry (153,090 B).
+
 ### Admissibility argument
 
+A heuristic is admissible if h(s) ≤ d(s), the true distance, for every state s. Then the bound never cuts an optimal path.** Let d be the true distance of the start and take an optimal path. At depth g on it, the remaining true distance is d − g, so h ≤ d − g and g + h ≤ d. With bound = d, no node on that path is pruned, and the depth-first walk is exhaustive over the unpruned nodes, so it finds a solution of length d.
+
+Evidence (host, against the exact BFS table):
+
+| Gate | Result |
+| :--- | :--- |
+| H1: h ≤ d for all 3,674,160 states | 0 violations (mean h 6.743, mean d 8.756) |
+| H2: tables populated, maximum, solved entry | `hp` 5,040 max 7; `ho` 729 max 6; A 51,030 max 8; B 68,040 max 8; solved entry 0 in every table; no unfilled entries |
+| H3: length equals the exact distance for every state | 0 wrong lengths over all 3,674,160 states; every returned path replays to the solved state; 28 s wall clock (20.9 s CPU) |
+| H4: packed accessor equals unpacked, even and odd indices | 0 mismatches over 119,070 entries |
 
 ### Memory budget (bytes per table)
 
+Measured on the linked ELF with `riscv64-elf-size -A rv/ida_rv.elf`: `.rodata` 118,736 B + `.bss` 11 B = **118,747 B = 116.0 KiB**, against the 128 KiB (131,072 B) limit, leaving 12,325 B. There is no heap and the stack holds at most 12 frames of 12 bytes.
 
-#### solver.c vs mini.c
-
-| `solver.c` | `mini.c` | `final.c` |
-| -- | -- | -- |
-| Optimized | Brute Force | More optimized |
-| Prebuild a mapping tables to the next rank for step of each stage before BFS (2 ops) | Reranking byte representation to rank on every edge during BFS (21 ops) | Use `solver.c` |
+| Item | Layout | Bytes |
+| :--- | :--- | ---: |
+| Permutation records | 5,040 × 10 B: `next[3]` (3 × 2 B), `hp` (1), `pkA` (1), `pkB` (2) | 50,400 |
+| Twist records | 729 × 12 B: `next[3]` (3 × 2 B), `ho` (1), pad (1), `qkA` (2), `qkB` (2) | 8,748 |
+| Table A | 51,030 entries × 4 bits | 25,515 |
+| Table B | 68,040 entries × 4 bits | 34,020 |
+| Move tables and `.bss` | `move_f2`, `move_turns`, `move_end` (9 B each) and the 11-byte path in `.bss` | 38 |
+| **Total (computed)** | | **118,721** |
+| Total (linked, `.rodata` + `.bss`) | | 118,747 |
 
 ## 4. Stage 3: Efficiency in C
 
 > Outline: 5. Stage 3, C optimization: operation counts before and after, and node counts.
 
 ### Removing multiply, divide and modulo
+
+RV32I has no `mul`, `div` or `rem` and use bitwise and table lookup (modulo) operation instead.
+
 ### Branches and memory traffic
+
+The table shows each change measured alone, one level on top of the previous. "instr/node" is retired instructions divided by children generated, summed over the 14 hardest distance-11 states (448,824 children each run identically at every level); "worst" is the hardest state (p = 2234, o = 426; 45,312 children); "sample" is `21345671111111` including parsing the string.
+
+| Level | Change | instr/node | Worst (retired) | vs previous | Sample | `.text` (B) |
+| ---: | :--- | ---: | ---: | ---: | ---: | ---: |
+| 0 | every child rebuilt from the parent (R2 = 2 lookups, R' = 3) | 97.2 | 4,415,608 | | 1,106,041 | 1,176 |
+| 1 | R2 and R' continue from the previous child of the same face | 88.9 | 4,038,057 | −8.5 % | 1,014,579 | 1,240 |
+| 2 | test the cheapest bound first (`hp`, `ho`, then A, then B) | 69.2 | 3,142,280 | −22.2 % | 791,453 | 1,216 |
+| 3 | twist keys pre-scaled (no multiply in the index) | 66.4 | 3,008,582 | −4.0 % | 789,778 | 1,156 |
+| 4 | one record per state, search carries byte offsets | 64.9 | 2,947,298 | −2.3 % | 712,852 | 1,252 |
+| 5 | per-level data in one frame struct walked by a pointer | **55.9** | **2,540,235** | −13.9 % | 628,454 | 1,228 |
+
+Total: 97.2 → 55.9 instructions per node (−42.5 %), worst case 4,415,608 → 2,540,235.
+
+Why each step pays, argued from operation counts:
+
+- **Branches and loads.** Over the 25,703,170 children generated for all 2,644 distance-11 states, 25.4 % are rejected by `hp` or `ho` alone, 45.6 % by table A, 12.3 % by table B and 16.7 % survive. The packed lookups are the expensive ones (shift, mask, address): the old code did two per child; testing in order does 0.746 + 0.290 = **1.04** per child (table A for the 74.6 % that pass the first test, table B for the 29.0 % that pass A). It also drops the max computation.
+- **Spills and Addressing.** Putting a level's `lp, lo, cp, co, next, last, move` in one 12-byte frame and walking a frame pointer turns each of them into a load or store with a constant offset, and `depth++` into one add.
+
 ### Operation and node counts
+
+| Distance | States | Mean nodes | Max nodes |
+| ---: | ---: | ---: | ---: |
+| 0 | 1 | 0 | 0 |
+| 1 | 9 | 5.0 | 9 |
+| 2 | 54 | 8.5 | 15 |
+| 3 | 321 | 12.0 | 21 |
+| 4 | 1,847 | 15.5 | 29 |
+| 5 | 9,992 | 19.2 | 52 |
+| 6 | 50,136 | 24.2 | 100 |
+| 7 | 227,536 | 40.9 | 250 |
+| 8 | 870,072 | 132.0 | 896 |
+| 9 | 1,887,748 | 589.6 | 3,637 |
+| 10 | 623,800 | 2,085.1 | 18,189 |
+| 11 | 2,644 | 9,721.3 | **45,312** |
+
+#### solver.c vs mini.c vs final
+
+| `solver.c` | `mini.c` | `final` |
+| -- | -- | -- |
+| Optimized | Brute Force | More optimized | Most Optimized |
+| Prebuild a mapping tables to the next rank for step of each stage before BFS (2 ops) | Reranking byte representation to rank on every edge during BFS (21 ops) | Use IDA* search on a heuristics to prune branch |
+
+
+What the optimisations bought compre to previous method:
+
+| Quantity | Baseline `solver.c` | Final |
+| :--- | ---: | ---: |
+| States visited per query | 3,674,160 | worst 45,312 nodes |
+| Edges / children | 33,067,440 | worst 45,312 |
+| Unpruned depth-11 tree | | 653,034,700 (14,412× more than the worst case) |
+| Transition updates | 66,134,880 | 2 per child |
+| Retired instructions, worst distance-11 state, RV32_ISS | ≈ 9.92 × 10⁸ (estimate: 66,134,880 × 15, not measured) | **2,540,235** (measured; all 2,644 distance-11 states run, all exit 0) |
+| Instructions per node | ≈ 15 per update | 53.3 to 60.2 across all distance-11 states |
+| Static data | 18,405,414 B peak | 118,747 B (116.0 KiB, limit 128 KiB) |
 
 ## 5. Stage 4: RV32I Assembly
 
@@ -223,6 +329,12 @@ This rate is for a sequential 4-instruction loop, the baseline's loads and store
 ### Host gates H1–H4
 ### Target gates T5–T7
 ### Test cases and results
+
+| State | Expected length | RV32_ISS retired | RV32_5S retired | RV32_5S cycles |
+| :--- | ---: | ---: | ---: | ---: |
+| `12345671111111` (solved) | 0 | 89 | 88 | 118 |
+| `35724612221132` (R B D R from solved, reduces to 4 moves) | 4 | 1,129 | 1,128 | 1,318 |
+| `21345671111111` (distance 11) | 11 | 628,454 | 628,453 | 710,683 |
 
 ## 7. LED Matrix Visualization
 

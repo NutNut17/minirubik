@@ -1,5 +1,7 @@
 .frama-c/
 .frama-c-mcp/
 *.swp
+*.txt
 solver
 mini
+calibration/results/raw/
