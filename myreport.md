@@ -75,6 +75,8 @@ The solved state has rank 0. Because a move changes the permutation using only
 the permutation and the twists using only the twists, `solver.c` keeps two
 small transition tables per face instead of one large one.
 
+> Lehmer is designed to punish the state that has more false of the cubies. The punishment is mangified on each iteration
+
 ### Diameter 11 by exhaustive BFS
 
 Breadth-first search from the solved state visits all 3,674,160 states, so the
@@ -107,18 +109,11 @@ Example: `./solver 21345671111111` prints `B' R' D2 R' B R B' R D2 B R'`.
 
 ### Where the cost lies
 
-Peak memory of the baseline, computed and measured on my
-machine with `/usr/bin/time -l`:
-
-### Where the cost lies
-
 Peak memory of the baseline computed, and measured on my machine with `/usr/bin/time -l`:
 
 | Program | State | Wall time (s, min) | Peak RSS (B) |
 | :--- | :--- | ---: | ---: |
 | `solver` | 21345671111111 | 0.06 | 19,824,640 |
-| `solver` | 12345671111111 | 0.06 | 19,824,640 |
-| `mini` | 21345671111111 | 0.48 | 56,524,800 |
 | `mini` | 12345671111111 | 0.48 | 56,524,800 |
 
 This agrees with `report.md` (solver 0.065 s / 19.8 MB, mini 0.51 s / 56.5 MB).
@@ -182,11 +177,6 @@ This rate is for a sequential 4-instruction loop, the baseline's loads and store
 
 > Outline: Stage 2, design: IDA* plus heuristic tables, the admissibility argument, and memory per table.
 
-
-
-## 3. Stage 2: Representation and Algorithm
-<!-- Draft written with AI assistance. Replace the wording with your own; the numbers come from calibration/ and ida.c. -->
-
 ### Search: IDA*
 
 Iterative-deepening A* Algorithm (Korf 1985) with an explicit stack:
@@ -223,20 +213,11 @@ Negative results: a "last-level shortcut" (test for the solved state without exp
 
 ### Admissibility argument
 
-A heuristic is admissible if h(s) ≤ d(s), the true distance, for every state s. Then the bound never cuts an optimal path.** Let d be the true distance of the start and take an optimal path. At depth g on it, the remaining true distance is d − g, so h ≤ d − g and g + h ≤ d. With bound = d, no node on that path is pruned, and the depth-first walk is exhaustive over the unpruned nodes, so it finds a solution of length d.
-
-Evidence (host, against the exact BFS table):
-
-| Gate | Result |
-| :--- | :--- |
-| H1: h ≤ d for all 3,674,160 states | 0 violations (mean h 6.743, mean d 8.756) |
-| H2: tables populated, maximum, solved entry | `hp` 5,040 max 7; `ho` 729 max 6; A 51,030 max 8; B 68,040 max 8; solved entry 0 in every table; no unfilled entries |
-| H3: length equals the exact distance for every state | 0 wrong lengths over all 3,674,160 states; every returned path replays to the solved state; 28 s wall clock (20.9 s CPU) |
-| H4: packed accessor equals unpacked, even and odd indices | 0 mismatches over 119,070 entries |
+A heuristic is admissible if h(s) ≤ d(s).
 
 ### Memory budget (bytes per table)
 
-Measured on the linked ELF with `riscv64-elf-size -A rv/ida_rv.elf`: `.rodata` 118,736 B + `.bss` 11 B = **118,747 B = 116.0 KiB**, against the 128 KiB (131,072 B) limit, leaving 12,325 B. There is no heap and the stack holds at most 12 frames of 12 bytes.
+Measured on the linked ELF with `riscv64-elf-size -A rv/ida_rv.elf`: `.rodata` 118,736 B + `.bss` 11 B = **118,747 B = 116.0 KiB**, against the 128 KiB (131,072 B) limit. There is no heap.
 
 | Item | Layout | Bytes |
 | :--- | :--- | ---: |
@@ -258,7 +239,7 @@ RV32I has no `mul`, `div` or `rem` and use bitwise and table lookup (modulo) ope
 
 ### Branches and memory traffic
 
-The table shows each change measured alone, one level on top of the previous. "instr/node" is retired instructions divided by children generated, summed over the 14 hardest distance-11 states (448,824 children each run identically at every level); "worst" is the hardest state (p = 2234, o = 426; 45,312 children); "sample" is `21345671111111` including parsing the string.
+The table shows each change measured alone, one level on top of the previous. "instr/node" is retired instructions divided by children generated, summed over the 14 hardest distance-11 states; "worst" is the hardest state (p = 2234, o = 426; 45,312 children); "sample" is `21345671111111` including parsing the string.
 
 | Level | Change | instr/node | Worst (retired) | vs previous | Sample | `.text` (B) |
 | ---: | :--- | ---: | ---: | ---: | ---: | ---: |
@@ -273,7 +254,7 @@ Total: 97.2 → 55.9 instructions per node (−42.5 %), worst case 4,415,608 →
 
 Why each step pays, argued from operation counts:
 
-- **Branches and loads.** Over the 25,703,170 children generated for all 2,644 distance-11 states, 25.4 % are rejected by `hp` or `ho` alone, 45.6 % by table A, 12.3 % by table B and 16.7 % survive. The packed lookups are the expensive ones (shift, mask, address): the old code did two per child; testing in order does 0.746 + 0.290 = **1.04** per child (table A for the 74.6 % that pass the first test, table B for the 29.0 % that pass A). It also drops the max computation.
+- **Branches and loads.** Over the 25,703,170 children generated for all 2,644 distance-11 states, 25.4 % are rejected by `hp` or `ho` alone, 45.6 % by table A, 12.3 % by table B and 16.7 % survive. 
 - **Spills and Addressing.** Putting a level's `lp, lo, cp, co, next, last, move` in one 12-byte frame and walking a frame pointer turns each of them into a load or store with a constant offset, and `depth++` into one add.
 
 ### Operation and node counts
@@ -307,11 +288,9 @@ What the optimisations bought compre to previous method:
 | :--- | ---: | ---: |
 | States visited per query | 3,674,160 | worst 45,312 nodes |
 | Edges / children | 33,067,440 | worst 45,312 |
-| Unpruned depth-11 tree | | 653,034,700 (14,412× more than the worst case) |
 | Transition updates | 66,134,880 | 2 per child |
-| Retired instructions, worst distance-11 state, RV32_ISS | ≈ 9.92 × 10⁸ (estimate: 66,134,880 × 15, not measured) | **2,540,235** (measured; all 2,644 distance-11 states run, all exit 0) |
+| Retired instructions, worst distance-11 state, RV32_ISS | ≈ 9.92 × 10⁸ (estimate: 66,134,880 × 15, not measured) | **2,540,235** (measured; all 2,644 distance-11 states run) |
 | Instructions per node | ≈ 15 per update | 53.3 to 60.2 across all distance-11 states |
-| Static data | 18,405,414 B peak | 118,747 B (116.0 KiB, limit 128 KiB) |
 
 ## 5. Stage 4: RV32I Assembly
 
@@ -327,6 +306,16 @@ What the optimisations bought compre to previous method:
 > Outline: Correctness gates: H1–H4 results (including H3 wall time) and T5–T7.
 
 ### Host gates H1–H4
+
+Evidence (host, against the exact BFS table):
+
+| Gate | Result |
+| :--- | :--- |
+| H1: h ≤ d for all 3,674,160 states | 0 violations (mean h 6.743, mean d 8.756) |
+| H2: tables populated, maximum, solved entry | `hp` 5,040 max 7; `ho` 729 max 6; A 51,030 max 8; B 68,040 max 8; solved entry 0 in every table; no unfilled entries |
+| H3: length equals the exact distance for every state | 0 wrong lengths over all 3,674,160 states; every returned path replays to the solved state; 28 s wall clock (20.9 s CPU) |
+| H4: packed accessor equals unpacked, even and odd indices | 0 mismatches over 119,070 entries |
+
 ### Target gates T5–T7
 ### Test cases and results
 
