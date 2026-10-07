@@ -11,12 +11,14 @@ COLOR:
     .byte 1,5,3,5,3,1,3,1,5,1,3,4
     .byte 3,4,1,4,1,3,0,4,3,4,3,0
     .byte 3,0,4
-# PIX[idx*3 + slot]: byte offset ((y*35 + x)*4) of the 4x3 facelet block, idx = position - 1
+# PIX[idx*3 + slot]: byte offset ((y*35 + x)*4) of the top-left pixel of the 4x3 facelet cell, idx = position - 1
+    .align 1
 PIX:
     .half 472,1052,1032,2012,1452,1472,1996,1416,1436
     .half 52,1088,1068,2432,1488,1508,2416,1524,1400
     .half 36,980,1104
 # FIXED: the fixed corner (offset .half, colour .half) x 3, drawn once
+    .align 1
 FIXED:
     .half 456,0,1016,2,996,4
 # move tables of solver.c: SRC[face*7 + i], TW[face*7 + i]; move m = face*3 + turns - 1
@@ -30,11 +32,16 @@ MOVEF:
     .byte 0,0,0,1,1,1,2,2,2
 MOVET:
     .byte 1,2,3,1,2,3,1,2,3
-# dummy test case
+# test case: the state string (override with make STATE=...) and the dummy solver answer
+#ifdef TEST_STATE
 STATE:
-    .asciz "21345671111111"
+    .asciz TEST_STATE
+#else
+STATE:
+    .asciz "41625372313211"
+#endif
 DUMMYPATH:
-    .byte 0,5,7,2,3,2,5,0,7,0,3
+    .byte 2,6,2,3,6,4,2,6,3,7,5
     .align 2
 EXPECT_SUMS:
-    .word 0x4EB44E87,0xD7E2D4C3,0x0EECF9A0,0xB0E0A2A7,0x470EA9F1,0x398836D2,0x5A8A89B7,0xDE1B5738,0x9BB1FC1A,0x4B7D191C,0xD7AE2ADB,0x03297E54
+    .word 0xBC6E7070,0x1186E990,0xC7D1CDB2,0xC533303C,0x174593DA,0x16CD74E1,0xFB9B2C91,0x51ED94FA,0x4D45B480,0x120B25C9,0xCA3F4D24,0x3413F6D1

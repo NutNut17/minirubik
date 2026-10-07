@@ -28,49 +28,87 @@ solve:
 // ---- PART 1: rank the string ---------------------------------------------------------
 // C:  for i in 0..6:  smaller = number of later digits < digit i ;  p = p * (7 - i) + smaller
 //     for i in 0..5:  o = o * 3 + (s[7 + i] - '1')
-// Written as loops to keep the code small: it runs once per query. p * (7 - i) is repeated addition.
-    li   a1, 0                    // p
-    li   t0, 0                    // i
-    li   t3, 7
-rk_i:
-    add  t1, a0, t0
-    lbu  t1, 0(t1)                // digit i
-    li   a2, 0                    // smaller = 0
-    addi t2, t0, 1                // j = i + 1
-rk_j:
-    beq  t2, t3, rk_jend
-    add  t4, a0, t2
-    lbu  t4, 0(t4)
-    sltu t4, t4, t1               // digit j < digit i
-    add  a2, a2, t4
-    addi t2, t2, 1
-    j    rk_j
-rk_jend:
-    sub  t5, t3, t0               // 7 - i
-    mv   t6, a1                   // old p
-    li   a1, 0
-rk_mul:
-    beqz t5, rk_mulend
-    add  a1, a1, t6               // p * (7 - i) by repeated addition
-    addi t5, t5, -1
-    j    rk_mul
-rk_mulend:
-    add  a1, a1, a2               // + smaller
-    addi t0, t0, 1
-    bne  t0, t3, rk_i             // a1 = p, 0..5039
-    li   a2, 0                    // o, Horner over the raw characters 7..12, corrected once at the end
-    li   t0, 7
-    li   t3, 13
-rk_o:
-    add  t1, a0, t0
-    lbu  t1, 0(t1)
-    slli t4, a2, 1
-    add  a2, a2, t4               // o * 3
-    add  a2, a2, t1
-    addi t0, t0, 1
-    bne  t0, t3, rk_o
-    li   t1, 17836                // '1' * (243 + 81 + 27 + 9 + 3 + 1) = 49 * 364
-    sub  a2, a2, t1               // a2 = o, 0..728
+// The seven cubie digits go to t0..t6; p is built by Horner's rule with constant factors 6,5,4,3,2.
+    lbu  t0, 0(a0)
+    lbu  t1, 1(a0)
+    lbu  t2, 2(a0)
+    lbu  t3, 3(a0)
+    lbu  t4, 4(a0)
+    lbu  t5, 5(a0)
+    lbu  t6, 6(a0)
+    sltu a1, t1, t0               // c0 = number of later digits smaller than digit 0; p = c0
+    sltu a2, t2, t0
+    add  a1, a1, a2
+    sltu a2, t3, t0
+    add  a1, a1, a2
+    sltu a2, t4, t0
+    add  a1, a1, a2
+    sltu a2, t5, t0
+    add  a1, a1, a2
+    sltu a2, t6, t0
+    add  a1, a1, a2
+    sltu a2, t2, t1               // c1
+    sltu a3, t3, t1
+    add  a2, a2, a3
+    sltu a3, t4, t1
+    add  a2, a2, a3
+    sltu a3, t5, t1
+    add  a2, a2, a3
+    sltu a3, t6, t1
+    add  a2, a2, a3
+    slli a3, a1, 2                // p = p * 6 + c1
+    slli a1, a1, 1
+    add  a1, a1, a3
+    add  a1, a1, a2
+    sltu a2, t3, t2               // c2
+    sltu a3, t4, t2
+    add  a2, a2, a3
+    sltu a3, t5, t2
+    add  a2, a2, a3
+    sltu a3, t6, t2
+    add  a2, a2, a3
+    slli a3, a1, 2                // p = p * 5 + c2
+    add  a1, a1, a3
+    add  a1, a1, a2
+    sltu a2, t4, t3               // c3
+    sltu a3, t5, t3
+    add  a2, a2, a3
+    sltu a3, t6, t3
+    add  a2, a2, a3
+    slli a1, a1, 2                // p = p * 4 + c3
+    add  a1, a1, a2
+    sltu a2, t5, t4               // c4
+    sltu a3, t6, t4
+    add  a2, a2, a3
+    slli a3, a1, 1                // p = p * 3 + c4
+    add  a1, a1, a3
+    add  a1, a1, a2
+    sltu a2, t6, t5               // c5
+    slli a1, a1, 1                // p = p * 2 + c5   (c6 is 0, p * 1 is p)
+    add  a1, a1, a2               // a1 = p, 0..5039
+    lbu  a2, 7(a0)                // o in Horner form over the raw characters, corrected once at the end
+    lbu  a3, 8(a0)
+    slli a4, a2, 1
+    add  a2, a2, a4
+    add  a2, a2, a3               // o = o * 3 + c
+    lbu  a3, 9(a0)
+    slli a4, a2, 1
+    add  a2, a2, a4
+    add  a2, a2, a3
+    lbu  a3, 10(a0)
+    slli a4, a2, 1
+    add  a2, a2, a4
+    add  a2, a2, a3
+    lbu  a3, 11(a0)
+    slli a4, a2, 1
+    add  a2, a2, a4
+    add  a2, a2, a3
+    lbu  a3, 12(a0)
+    slli a4, a2, 1
+    add  a2, a2, a4
+    add  a2, a2, a3
+    li   a3, 17836                // '1' * (243 + 81 + 27 + 9 + 3 + 1) = 49 * 364
+    sub  a2, a2, a3               // a2 = o, 0..728
     slli a3, a1, 3                // po = 10 * p
     slli a4, a1, 1
     add  s9, a3, a4
@@ -111,7 +149,7 @@ sv_face:                          // C: the move loop, one face (three moves) at
     add  t1, a3, a6
     lhu  t1, 0(t1)
     add  a3, t1, s4
-    // within(child, budget): h <= budget; order hp, B, A, ho was the cheapest of 7 orders measured
+    // within(child, budget): h <= budget, cheapest bound first
     lbu  t4, 6(a0)                // hp
     bltu s1, t4, sv_t2
     lhu  t4, 8(a0)
@@ -164,7 +202,7 @@ sv_t2:                           // turn 2 (R2, B2, D2): one more turn on the la
     add  t1, a3, a6
     lhu  t1, 0(t1)
     add  a3, t1, s4
-    // within(child, budget): h <= budget; order hp, B, A, ho was the cheapest of 7 orders measured
+    // within(child, budget): h <= budget, cheapest bound first
     lbu  t4, 6(a0)                // hp
     bltu s1, t4, sv_t3
     lhu  t4, 8(a0)
@@ -215,7 +253,7 @@ sv_t3:                           // turn 3 (R', B', D'): one more turn again
     add  t1, a3, a6
     lhu  t1, 0(t1)
     add  a3, t1, s4
-    // within(child, budget): h <= budget; order hp, B, A, ho was the cheapest of 7 orders measured
+    // within(child, budget): h <= budget, cheapest bound first
     lbu  t4, 6(a0)                // hp
     bltu s1, t4, sv_face
     lhu  t4, 8(a0)

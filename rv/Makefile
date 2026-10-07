@@ -4,7 +4,9 @@
 #   make size       section sizes: .rodata + .data + .bss is the static data (limit 131072 B)
 RVCC   ?= riscv64-elf-gcc
 CFLAGS  = -O2 -march=rv32i -mabi=ilp32 -ffreestanding -nostdlib -static -Wall -Wextra
-RIPES  ?= ../../Ripes/build/Ripes.app/Contents/MacOS/Ripes
+# An exported $RIPES in your shell is ignored on purpose (it may be a stale path); override with RIPES_BIN=...
+RIPES_BIN ?= ../../Ripes/build/Ripes.app/Contents/MacOS/Ripes
+RIPES      = $(RIPES_BIN)
 PROC   ?= RV32_ISS
 
 all: ida_rv.elf

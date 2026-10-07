@@ -61,6 +61,8 @@ Any optimal solution is acceptable; check the length and replay the path to the 
 | Solved cube including parsing | 89 retired |
 | Instructions per node | about 56 (53.3 to 60.2) |
 
+The assembly (`solver.s`) measures 1,203,894 retired for the hardest state (harness included), 1,056 bytes of solver code and 119,251 B of static data: see `OPTIMIZATION.md`.
+
 hw2.md also asks you to report this reference build next to your assembly and to explain any case where the assembly does not win.
 
 ## Measuring your build

@@ -3,6 +3,7 @@
 # OREC: 729 records x 12 B = next[3] (.half), ho, pad (.byte), qkA, qkB (.half, pre-scaled)
 # TABA: 51030 nibbles, TABB: 68040 nibbles, two entries per byte, even index in the low nibble
     .data
+    .align 2
 PREC:
     .half 11040,90,1980
     .byte 0,14

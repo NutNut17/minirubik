@@ -10,12 +10,15 @@
 | System GCC Version | Apple clang version 17.0.0 (clang-1700.6.4.2) Target: arm64-apple-darwin25.5.0 |
 | `riscv64-elf-gcc` version | GNU GCC 16.2.0 |
 
+> Read `mynote.md` for file understanding
+
 ### AI usage disclosure
 
-Claude Code was used to explain concepts in `report.md` and `hw2.md`, to set up the fork, and to
-install and build the tools. Nothing here has been written as final analysis;
-the representation, the search design, the measurements, the optimization
-reasoning and the RV32I assembly will be my own work.
+Claude Code (Anthropic) was used in this assignment due to opposing absurd requiement to implement manually. It explained the concepts in `report.md` and `hw2.md`, set up the fork, built Ripes and installed the tools. It wrote the measurement scripts, but the numbers in this note come from running them on my machine. It wrote and tested the RV32I solver, the table generators and the test scripts, and it produced and measured the optimisation steps. In the process, I tried to find the problem and finding path to optimization. 
+
+### My summary
+
+Throughout the project, I explored how to measure performance of different levels of abstraction. Saw the impact of storing decision, the bit-space optimization (operation, storing and coutning) as well as explored multiple pruning methods with pre-calculated table. It was a steep curve of learning. Although I didn't did everything myself, but I learn a lot through this project.
 
 ## 1. The State Space
 
@@ -56,7 +59,7 @@ Each quarter turn adds twists that total 0 mod 3:
 - B: the same pattern, total 6 = 0 mod 3
 - D: all +0, total 0
 
-The sum of all seven twists therefore never changes, and the solved state has sum 0. This is a modulo-3 invariant.
+The sum of all seven twists therefore never changes, and the solved state has sum 0. This is a modulo-3 invariant, not a parity.
 
 ### Ranking: Lehmer code and base-3
 
@@ -189,7 +192,7 @@ for bound = h(start) .. 11:
     nothing found: bound = bound + 1
 ```
 
-The Memory is one 12-frame stack, no recursion. A move costs 1 whatever its angle. After a move on face f, all three moves on f are skipped, this prunes together with constructed heuristic tables.
+The Memory is one 12-byte frame stack, no recursion. A move costs 1 whatever its angle. After a move on face f, all three moves on f are skipped, this prunes together with constructed heuristic tables.
 
 ### Heuristic tables
 
@@ -197,8 +200,8 @@ h(p, o) is the maximum of four lower bounds.
 
 | Table | Remembers | Keys | Packed size |
 | :--- | :--- | ---: | ---: |
-| `hp` | the positions of all cubies (twists ignored) | 5,040 | in the permutation records |
-| `ho` | the twists only (positions ignored) | 729 | in the twist records |
+| `hp` | the positions of all cubies (twists ignored) and the encoding of the index for Table A & B | 5,040 | in the permutation records |
+| `ho` | the twists only (positions ignored) and the encoding of the index for Table A & B | 729 | in the twist records |
 | A | positions of cubies {0, 3, 6} and the twists at positions {0, 2, 3, 4, 5} | 210 × 243 = 51,030 | 25,515 B |
 | B | positions of cubies {0, 1, 2, 3, 5} and the twists at positions {0, 1, 2} | 2,520 × 27 = 68,040 | 34,020 B |
 
@@ -213,7 +216,11 @@ Negative results: a "last-level shortcut" (test for the solved state without exp
 
 ### Admissibility argument
 
-A heuristic is admissible if h(s) ≤ d(s).
+A heuristic is admissible if h(s) ≤ d(s), the true distance, for every state s.
+
+- Each table entry is a minimum over a set of states
+- The maximum of lower bounds is a lower bound
+- The bound never cuts an optimal path
 
 ### Memory budget (bytes per table)
 
@@ -297,11 +304,28 @@ What the optimisations bought compre to previous method:
 > Outline: 6. Stage 4, RV32I: key instruction sequences, a table of --iret and .text size per refinement, and a comparison against gcc -O2.
 
 ### Key instruction sequences
-### Iterative refinement (--iret and .text per step)
+
+The solver is `asm/solver.s`, called by the harness `asm/main.s` with the address of the 14-character string in `a0`; it returns the move count in `a0`.
+
+The state of the current level lives in registers (`s9`/`s10` the two record addresses, `a0`/`a3` the last child, `a4` next face, `a7` last face, `s1` budget)
+
+A frame in memory is written only when the search goes one level down. 
+
 ### Comparison with gcc -O2 -march=rv32i
 
-## 6. Correctness
+The reference is the C version of the same algorithm, `rv/ida_rv.c` built with `riscv64-elf-gcc -O2 -march=rv32i -mabi=ilp32 -ffreestanding -nostdlib` (the numbers of section 4, level 5).
 
+| | C reference (`gcc -O2`) | Assembly (`solver.s`) | Winner |
+| :--- | ---: | ---: | :--- |
+| hardest state, retired | 2,540,235 (search only) | **1,203,894** (about 1,199,000 without the harness) | assembly, 2.1× fewer |
+| 14 hardest states, retired | 25,109,302 | 12,281,162 | assembly, 2.0× fewer |
+| instructions per child | 55.9 | 27.4 | assembly |
+| `21345671111111`, retired | 628,454 (parse included) | 326,073 (harness included) | assembly |
+| `21345671111111` on RV32_5S, cycles | 710,683 | 412,264 | assembly, 1.7× fewer |
+| `.text`, whole program | 1,220 B | 1,640 B (solver 1,056 B + harness 584 B) | **C** |
+| static data | 118,747 B | 119,251 B | similar, both under 131,072 B |
+
+## 6. Correctness
 
 > Outline: Correctness gates: H1–H4 results (including H3 wall time) and T5–T7.
 
@@ -317,7 +341,21 @@ Evidence (host, against the exact BFS table):
 | H4: packed accessor equals unpacked, even and odd indices | 0 mismatches over 119,070 entries |
 
 ### Target gates T5–T7
+
+- **T5, every returned path reaches the solved state.** All 2,644 distance-11 states and 700 random states of every distance exit 0 on RV32_ISS: 0 failures. 
+- **T6, `21345671111111` returns an optimal 11-move solution.** Exit code 0 requires exactly 11 moves and a solved replay: 326,073 retired on RV32_ISS. The diameter itself is the host result of gate H3.
+- **T7, my three cases plus any grader state, on RV32_ISS and a pipelined model.** The table below runs a solved cube, a short scramble and distance-11 states on RV32_ISS and RV32_5S. 
+
+| State | Expected length | RV32_ISS retired | RV32_5S retired | RV32_5S cycles | exit |
+| :--- | ---: | ---: | ---: | ---: | :--- |
+| `12345671111111` (solved) | 0 | 580 | 579 | 824 | 0 |
+| `35724612221132` (R B D R from solved, reduces to 4 moves) | 4 | 3,950 | 3,949 | 5,131 | 0 |
+| `21345671111111` (distance 11) | 11 | 326,073 | 326,072 | 412,264 | 0 |
+| `41625372313211` (hardest, 45,312 children) | 11 | 1,203,894 | 1,203,893 | 1,533,681 | 0 |
+
 ### Test cases and results
+
+C reference build (`rv/ida_rv.c`, `gcc -O2`, harness-free) on the same states:
 
 | State | Expected length | RV32_ISS retired | RV32_5S retired | RV32_5S cycles |
 | :--- | ---: | ---: | ---: | ---: |
@@ -329,20 +367,26 @@ Evidence (host, against the exact BFS table):
 
 > Outline: LED matrix: how a facelet maps to a pixel and then to an address.
 
+### Visualization
+
+![start](img/start.png)
+![final](img/final.png)
+
 ### Net layout and pixel mapping
-### Redrawing after each move
+
+The LED Matrix is set to 35 wide and 25 tall. It is row-major, one 32-bit word `0x00RRGGBB` per pixel: pixel (x, y) is at `LED_MATRIX_0_BASE + (y * 35 + x) * 4` (the in-GUI text says column-major; `hw2.md` notes it is wrong).
+
+Each facelet has a 4 × 3 pixel cell; a face is 2 × 2 cells
 
 ## 8. Pipeline Walkthrough
 
 > Outline: Pipeline walkthrough: IF, ID, EX, MEM, WB with screenshots.
 
-### IF / ID / EX / MEM / WB
-### Signals and memory updates
-
-## 9. Negative Results
-
-> Outline: What didn't work: negative results you measured.
-
+![if](img/if.png)
+![id](img/id.png)
+![ex](img/ex.png)
+![mem](img/mem.png)
+![wb](img/wb.png)
 
 ## References
 
@@ -350,3 +394,4 @@ Evidence (host, against the exact BFS table):
 2. Ripes, https://github.com/mortbopet/Ripes, commit `5b8a616`.
 3. Jaap Scherphuis, Pocket Cube (distance distribution in both metrics).
 4. Korf, *Finding Optimal Solutions to Rubik's Cube Using Pattern Databases*, AAAI-97.
+5. Korf, *Depth-First Iterative-Deepening: An Optimal Admissible Tree Search*, Artificial Intelligence 27(1), 1985, 97-109.

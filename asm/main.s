@@ -7,6 +7,9 @@
 //            0: no drawing at all (command-line build used for --iret measurements)
 //   SELFTEST 1: headless self-check of the drawing (the Makefile defines the LED symbols)
 //   USE_TABLES 1: append tables.s (PREC, OREC, TABA, TABB) for the real solver
+//   TEST_STATE / TEST_LEN: another test case, e.g. make run STATE=12345671111111 LEN=0
+//                          TEST_LEN=255 does not check the length (only that the cube is solved): for states without a known optimum
+//   SUITE    1: one program that runs the four built-in test cases and exits with the number of failures (make suite)
 //
 // The program:  1. copies the state string into the display cube      (load_display)
 //               2. calls  solve(a0 = address of the 14-character string)   <- YOUR code in solver.s
@@ -24,12 +27,82 @@
 #ifndef USE_TABLES
 #define USE_TABLES 0
 #endif
+#ifndef TEST_LEN
+#define TEST_LEN 11
+#endif
+#ifndef SELFTEST_FULL
+#define SELFTEST_FULL 0
+#endif
+#ifndef SUITE
+#define SUITE 0
+#endif
 
-    .equ EXPECT_LEN, 11          // optimal length of the test case in led_data.s
-    .equ DELAY, 40000            // busy-wait loops between frames; raise it if the animation is too fast
+    .equ EXPECT_LEN, TEST_LEN    // optimal length of the test case (make LEN=... overrides it)
     .equ LED_WORDS, 875          // 35 * 25 pixels, one 32-bit word each
     .equ LED_ROW_BYTES, 140      // one pixel row = 35 words * 4 bytes (matrix must be 35 wide)
 
+#if SUITE
+    .text
+    .globl main
+main:
+    // Four test cases in one program: solved cube, short scramble, sample vector, hardest state.
+    // For each: load the string into the display cube, call solve, replay its moves on the display cube,
+    // check that the cube is solved and the length is the expected one. The exit code is the number of failures.
+    // solve may use s0..s10, so the loop state lives on the stack.
+    addi sp, sp, -32
+    sw   ra, 28(sp)
+    la   t0, SUITE_CASES
+    sw   t0, 24(sp)               // pointer to the current case
+    sw   zero, 20(sp)             // failures so far
+su_case:
+    lw   t0, 24(sp)
+    lw   a0, 0(t0)
+    beqz a0, su_end               // a zero string pointer ends the list
+    jal  ra, load_display
+    lw   t0, 24(sp)
+    lw   a0, 0(t0)
+    jal  ra, solve
+    sw   a0, 16(sp)               // length returned
+    li   t0, 11
+    bgtu a0, t0, su_fail          // path[] holds at most 11 moves
+    li   t1, 0                    // move index
+    sw   t1, 12(sp)
+su_move:
+    lw   t1, 12(sp)
+    lw   t0, 16(sp)
+    beq  t1, t0, su_check
+    la   t2, path
+    add  t2, t2, t1
+    lbu  a0, 0(t2)
+    jal  ra, apply_move
+    lw   t1, 12(sp)
+    addi t1, t1, 1
+    sw   t1, 12(sp)
+    j    su_move
+su_check:
+    jal  ra, display_solved
+    beqz a0, su_fail              // the replayed cube is not solved
+    lw   t0, 24(sp)
+    lw   t1, 4(t0)                // expected length
+    lw   t2, 16(sp)
+    bne  t1, t2, su_fail
+    j    su_next
+su_fail:
+    lw   t0, 20(sp)
+    addi t0, t0, 1
+    sw   t0, 20(sp)
+su_next:
+    lw   t0, 24(sp)
+    addi t0, t0, 8
+    sw   t0, 24(sp)
+    j    su_case
+su_end:
+    lw   a0, 20(sp)               // exit status = number of failed cases
+    lw   ra, 28(sp)
+    addi sp, sp, 32
+    li   a7, 93
+    ecall
+#else
     .text
     .globl main
 main:
@@ -43,7 +116,6 @@ main:
 #if RENDER
     jal  ra, led_init            // clear the matrix, draw the fixed corner
     jal  ra, draw_cube
-    jal  ra, delay
 #endif
 #if SELFTEST
     jal  ra, frame_check
@@ -64,7 +136,6 @@ replay:
     jal  ra, apply_move          // update the display cube by one move
 #if RENDER
     jal  ra, draw_cube
-    jal  ra, delay
 #endif
 #if SELFTEST
     jal  ra, frame_check
@@ -72,11 +143,12 @@ replay:
     addi s1, s1, 1
     j    replay
 replay_done:
-
     jal  ra, display_solved
     beqz a0, fail_state
+#if TEST_LEN != 255
     li   t0, EXPECT_LEN
     bne  s0, t0, fail_length
+#endif
 #if SELFTEST
     la   t0, BADFRAMES
     lw   t0, 0(t0)
@@ -104,6 +176,7 @@ finish:
     addi sp, sp, 32
     li   a7, 93                  // exit with a0 as the status
     ecall
+#endif
 
 // ---------------------------------------------------------------------------------------
 // load_display(a0 = string): DP[i] = digit(i) - '1', DO[i] = digit(7 + i) - '1'
@@ -221,7 +294,8 @@ ds_no:
 #if RENDER
 // ---------------------------------------------------------------------------------------
 // LED matrix: row-major, pixel (x, y) is the word at  LED_MATRIX_0_BASE + (y * 35 + x) * 4.
-// The offsets of all facelets were computed on the host (PIX), so there is no multiply here.
+// A sticker is a lit 3 x 2 area in a 4 x 3 cell. The offsets of all cells were computed on the host (PIX),
+// so there is no multiply here.
 
 // led_init(): clear all 875 pixels, then draw the three stickers of the fixed corner
 led_init:
@@ -311,33 +385,21 @@ dc_slot:
     addi sp, sp, 32
     ret
 
-// fill_block(a0 = byte offset of the top-left pixel, a1 = colour word): a 4 x 3 pixel block
+// fill_block(a0 = byte offset of the cell's top-left pixel, a1 = colour word): the lit part of a sticker,
+// 3 pixels wide and 2 tall. The 4th column and 3rd row of the 4 x 3 cell stay dark (led_init cleared them),
+// which is what makes the two stickers of a face row visibly separate.
 fill_block:
     li   t0, LED_MATRIX_0_BASE
     add  t0, t0, a0
     sw   a1, 0(t0)
     sw   a1, 4(t0)
     sw   a1, 8(t0)
-    sw   a1, 12(t0)
     addi t0, t0, LED_ROW_BYTES
     sw   a1, 0(t0)
     sw   a1, 4(t0)
     sw   a1, 8(t0)
-    sw   a1, 12(t0)
-    addi t0, t0, LED_ROW_BYTES
-    sw   a1, 0(t0)
-    sw   a1, 4(t0)
-    sw   a1, 8(t0)
-    sw   a1, 12(t0)
     ret
 
-// delay(): busy wait so that every frame stays visible
-delay:
-    li   t0, DELAY
-dl_loop:
-    addi t0, t0, -1
-    bnez t0, dl_loop
-    ret
 #endif
 
 #if SELFTEST
@@ -362,6 +424,13 @@ fc_loop:
     la   t4, EXPECT_SUMS
     add  t4, t4, t3
     lw   t4, 0(t4)
+#if SELFTEST_FULL == 0
+    // another solver may find another optimal path: only frame 0 (scrambled) and the last frame (solved) are fixed
+    beqz t1, fc_cmp
+    li   t5, EXPECT_LEN
+    bne  t1, t5, fc_ok
+fc_cmp:
+#endif
     beq  t4, t2, fc_ok
     la   t5, BADFRAMES
     lw   t6, 0(t5)
@@ -389,8 +458,23 @@ path: .zero 12                   // moves written by solve(): face * 3 + turns -
 FRAME: .word 0
 BADFRAMES: .word 0
 
+#if SUITE
+// the built-in cases (strings first: this assembler does not resolve a label used in .word before it is defined)
+SC0: .asciz "12345671111111"       // solved
+SC1: .asciz "35724612221132"       // short scramble (R B D R)
+SC2: .asciz "21345671111111"       // sample vector, distance 11
+SC3: .asciz "41625372313211"       // hardest state, distance 11
+    .align 2
+// pointer to the state string, optimal length; a zero pointer ends the list
+SUITE_CASES:
+    .word SC0, 0, SC1, 4, SC2, 11, SC3, 11, 0, 0
+#endif
+
 #include "led_data.s"
-#include "solver.s"
+#ifndef SOLVER_FILE
+#define SOLVER_FILE "solver.s"
+#endif
+#include SOLVER_FILE
 #if USE_TABLES
 #include "tables.s"
 #endif

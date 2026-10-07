@@ -455,7 +455,7 @@ static int emit_asm(const char *path)
     fprintf(f, "# PREC: %d records x %d B = next[3] (.half, byte offsets), hp, pkA (.byte), pkB (.half)\n", PERMUTATIONS, P_STRIDE);
     fprintf(f, "# OREC: %d records x %d B = next[3] (.half), ho, pad (.byte), qkA, qkB (.half, pre-scaled)\n", ORIENTATIONS, O_STRIDE);
     fprintf(f, "# TABA: %d nibbles, TABB: %d nibbles, two entries per byte, even index in the low nibble\n", KEYS_A, KEYS_B);
-    fprintf(f, "    .data\nPREC:\n");
+    fprintf(f, "    .data\n    .align 2\nPREC:\n");
     for (unsigned p = 0; p < PERMUTATIONS; ++p)
         fprintf(f, "    .half %u,%u,%u\n    .byte %u,%u\n    .half %u\n", PREC[p].next[0], PREC[p].next[1], PREC[p].next[2], PREC[p].h, PREC[p].pkA, PREC[p].pkB);
     fprintf(f, "OREC:\n");
